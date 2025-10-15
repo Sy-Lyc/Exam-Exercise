@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Exam Exercise</title>
+  <link rel="shortcut icon" href="" />
+  <script src="https://unpkg.com/vue@3.5.13/dist/vue.global.js"></script>
+  <script src="https://unpkg.com/marked@15.0.11/marked.min.js "></script>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+
+
+
+<body>
+  <div id="app">
+    <div class="controls">
+      <h2>Exam Exercise</h2>
+      <div class="controls">
+        <button class="control-button" @click="toggleMode">{{ modeLabel }}</button>
+        <button class="control-button" @click="startWrongQuestions">刷错题({{ wrongQuestions.length }})</button>
+        <button class="control-button" @click="startExam">模拟考试</button>
+        <button class="control-button" @click="goToQuestionBank">题库</button>
+      </div>
+    </div>
+
+    <div v-if="loading">
+      <p>加载中...</p>
+    </div>
+
+    <div v-if="isExamMode" class="box">
+      <p>考试倒计时：{{ Math.floor(examTimeLeft / 60) }}:{{ String(examTimeLeft % 60).padStart(2, '0') }}</p>
+    </div>
+
+    <div v-if="currentQuestion && !loading">
+      <div class="box">
+        <span>{{ currentIndex + 1 }}/{{ questions.length }}</span>
+        <div v-html="renderMarkdown(currentQuestion.question)"></div>
+        <br />
+        <div v-for="(text, key) in currentQuestion.selections" :key="key" class="options">
+          <label class="selection-label grid-layout" :class="{
+                   correct: result && currentQuestion.answers.includes(key),
+                   wrong: result && !currentQuestion.answers.includes(key)
+                 }">
+            <input type="checkbox" v-model="selectedAnswers" :value="key" />
+            <strong class="selection-key">{{ key }}: </strong>
+            <div class="selection-body" v-html="renderMarkdown(text)"></div>
+          </label>
+        </div>
+        <br />
+        <button v-if="!isExamMode && !result" class="control-button" @click="submitAnswer">确定</button>
+        <button v-if="!isExamMode && result" class="control-button" @click="nextQuestion">下一题</button>
+        <button v-if="isExamMode" class="control-button" @click="submitAnswer">确定</button>
+      </div>
+    </div>
+
+    <div v-if="result">
+      <div class="box">
+        <div :class="'box result-text ' + result.statusClass"><strong>答题结果：</strong>{{ result.statusText }}</div>
+        <div class="box"><strong>正确答案：</strong>{{ result.correctAnswers.join(', ') }}</div>
+        <div class="box" v-html="renderMarkdown(result.summary)"></div>
+        <div class="box" v-html="renderMarkdown(result.suggestion)"></div>
+      </div>
+    </div>
+
+    <div v-if="quizOver" class="box">
+      <p>已完成本轮练习！你可以继续练习错题或者重新刷全部题目。</p>
+    </div>
+
+    <div class="footer">
+      <a href="https://github.com/hochenggang/MySQL-OCP-Brush-Questions-EN">代码仓库</a>|<a href="#"
+        @click="clearCache">清空缓存</a>
+    </div>
+  </div>
+
+  <script>
+    const app = Vue.createApp({
+      data() {
+        return {
+          questions: [],
+          wrongQuestions: JSON.parse(localStorage.getItem('wrong_questions') || '[]'),
+          correctQuestions: JSON.parse(localStorage.getItem('correct_questions') || '[]'),
+          currentIndex: 0,
+          selectedAnswers: [],
+          examAnswers: [], // 用于记录考试模式下每道题的答案
+          result: null,
+          quizOver: false,
+          mode: 'sequential', // sequential or random
+          currentQuestion: null,
+          loading: true, // 添加加载状态
+          isExamMode: false, // 是否为模拟考试模式
+          examQuestions: [], // 模拟考试的题目
+          examTimer: null, // 模拟考试的倒计时定时器
+          examTimeLeft: 120 * 60, // 剩余时间（单位：秒）
+          examScore: 0 // 模拟考试的得分
+        };
+      },
+      computed: {
+        modeLabel() {
+          return this.mode === 'sequential' ? '随机模式' : '顺序模式';
+        }
+      },
+      methods: {
+        async fetchQuestions() {
+          this.loading = true; // 开始加载时设置加载状态为 true
+          try {
+            const response = await fetch('./obcp1.json');
+            const data = await response.json();
+            this.questions = data
+              .filter(q => !this.correctQuestions.some(cq => cq.question === q.question))
+              .map(q => {
+                // 随机化选项顺序
+                const shuffledSelections = Object.entries(q.selections)
+                  .map(([key, value]) => ({ key, value }))
+                  .sort(() => Math.random() - 0.5);
+
+                // 重新生成选项的键值（A, B, C, D...）
+                const newKeys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').slice(0, shuffledSelections.length);
+                const newSelections = shuffledSelections.reduce((acc, { value }, index) => {
+                  acc[newKeys[index]] = value;
+                  return acc;
+                }, {});
+
+                // 更新答案的键值以匹配新的选项顺序
+                const keyMapping = shuffledSelections.reduce((acc, { key }, index) => {
+                  acc[key] = newKeys[index];
+                  return acc;
+                }, {});
+                const newAnswers = q.answers.map(answer => keyMapping[answer]);
+
+                return { ...q, selections: newSelections, answers: newAnswers };
+              });
+          } catch (error) {
+            console.error('加载题目失败:', error);
+            alert('加载题目失败，请检查网络连接。');
+          }
+          this.loading = false; // 加载完成后设置加载状态为 false
+        },
+        renderMarkdown(markdown) {
+          return marked.parse(markdown);
+        },
+        toggleMode() {
+          this.mode = this.mode === 'sequential' ? 'random' : 'sequential';
+          this.startAllQuestions();
+        },
+        startAllQuestions() {
+          this.fetchQuestions().then(() => {
+            this.shuffleIfNeeded();
+            this.resetQuiz();
+          });
+        },
+        startWrongQuestions() {
+          if (this.wrongQuestions.length === 0) {
+            alert("暂无错题可刷");
+            return;
+          }
+          this.questions = [...this.wrongQuestions];
+          this.shuffleIfNeeded();
+          this.resetQuiz();
+        },
+        shuffleIfNeeded() {
+          if (this.mode === 'random') {
+            this.questions.sort(() => Math.random() - 0.5);
+          }
+        },
+        resetQuiz() {
+          this.currentIndex = 0;
+          this.result = null;
+          this.selectedAnswers = [];
+          this.quizOver = false;
+          this.currentQuestion = this.questions[this.currentIndex];
+        },
+        submitAnswer() {
+          const correct = this.currentQuestion.answers;
+          const selected = [...this.selectedAnswers].sort();
+          const correctSorted = [...correct].sort();
+
+          let statusText = '', statusClass = '';
+          if (JSON.stringify(selected) === JSON.stringify(correctSorted)) {
+            statusText = '完全正确';
+            statusClass = 'correct';
+            if (!this.isExamMode) {
+              this.correctQuestions.push(this.currentQuestion);
+              localStorage.setItem('correct_questions', JSON.stringify(this.correctQuestions));
+            }
+          } else if (selected.some(a => correct.includes(a))) {
+            statusText = '部分正确';
+            statusClass = 'partial';
+          } else {
+            statusText = '完全错误';
+            statusClass = 'wrong';
+          }
+
+          this.result = {
+            statusText,
+            statusClass,
+            correctAnswers: correct,
+            summary: this.currentQuestion.summary,
+            suggestion: this.currentQuestion.suggestion
+          };
+
+          if (!this.isExamMode && statusText !== '完全正确') {
+            this.addToWrongQuestions();
+          }
+
+          // 在考试模式下记录答案并直接跳转到下一题
+          if (this.isExamMode) {
+            this.examAnswers[this.currentIndex] = [...this.selectedAnswers]; // 记录当前题的答案
+            this.nextQuestion();
+          }
+        },
+        addToWrongQuestions() {
+          const q = this.currentQuestion;
+          const exists = this.wrongQuestions.some(item => item.question === q.question);
+          if (!exists) {
+            this.wrongQuestions.push(q);
+            localStorage.setItem('wrong_questions', JSON.stringify(this.wrongQuestions));
+          }
+        },
+        nextQuestion() {
+          this.currentIndex++;
+          this.selectedAnswers = [];
+          this.result = null;
+
+          if (this.currentIndex < this.questions.length) {
+            this.currentQuestion = this.questions[this.currentIndex];
+          } else if (this.isExamMode) {
+            this.submitExam(); // 考试模式下，自动交卷
+          } else {
+            this.currentQuestion = null;
+            this.quizOver = true;
+          }
+        },
+        clearCache() {
+          const ok = confirm("清除所有做题记录吗？");
+          if (ok) {
+            localStorage.clear();
+            this.stopExamTimer(); // 停止考试倒计时
+            this.isExamMode = false;
+            this.examQuestions = [];
+            this.examTimeLeft = 120 * 60;
+            this.examScore = 0;
+            location.reload();
+          }
+        },
+        startExam() {
+          this.isExamMode = true;
+          this.examQuestions = [...this.questions].sort(() => Math.random() - 0.5).slice(0, 73); // 随机抽取73道题
+          this.questions = this.examQuestions;
+          this.examTimeLeft = 120 * 60; // 设置考试时间为120分钟
+          this.resetQuiz(); // 重置考试状态
+          this.startExamTimer(); // 启动倒计时
+        },
+        startExamTimer() {
+          this.examTimer = setInterval(() => {
+            if (this.examTimeLeft > 0) {
+              this.examTimeLeft--;
+            } else {
+              this.submitExam(); // 时间到，强制交卷
+            }
+          }, 1000);
+        },
+        stopExamTimer() {
+          clearInterval(this.examTimer);
+          this.examTimer = null;
+        },
+        submitExam() {
+          this.stopExamTimer(); // 停止倒计时
+          this.isExamMode = false;
+          this.quizOver = true;
+
+          // 计算成绩
+          let correctCount = 0;
+          this.examQuestions.forEach((question, index) => {
+            const selected = this.examAnswers[index] || [];
+            const correct = question.answers.sort();
+            if (JSON.stringify(selected.sort()) === JSON.stringify(correct)) {
+              correctCount++;
+            } else {
+              // 如果答错，将题目加入错题列表
+              const exists = this.wrongQuestions.some(item => item.question === question.question);
+              if (!exists) {
+                this.wrongQuestions.push(question);
+              }
+            }
+          });
+
+          // 更新错题到 localStorage
+          localStorage.setItem('wrong_questions', JSON.stringify(this.wrongQuestions));
+
+          this.examScore = correctCount; // 直接使用答对题目数量作为得分
+
+          const passMessage = this.examScore >= 46 ? '考试通过！' : '考试未通过！';
+          alert(`考试结束！您的得分是：${this.examScore} 分。${passMessage}`);
+        },
+        goToQuestionBank() {
+          window.location.href = './single.html'; // 跳转到题库页面
+        }
+      },
+      mounted() {
+        this.startAllQuestions();
+      }
+    });
+
+    app.mount('#app');
+  </script>
+</body>
+
+</html>
