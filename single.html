@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MySQL OCP Questions</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app">
+    <div class="controls">
+      <h2>MySQL OCP 题库</h2>
+      <button onclick="window.location.href='./index.html'" class="control-button">返回刷题</button>
+    </div>
+
+    <div id="questions">
+      <!-- 题目内容将通过 JavaScript 动态加载 -->
+    </div>
+  </div>
+
+  <script>
+    const jsonUrl = './obcp.json';
+    fetch(jsonUrl)
+      .then(res => res.json())
+      .then(data => {
+        const container = document.getElementById("questions");
+        data.forEach((item, idx) => {
+          // 创建题目框
+          const block = document.createElement("div");
+          block.className = "box"; // 使用和 index.html 相同的样式
+
+          // 题目序号
+          block.innerHTML += `<span>${idx + 1}/${data.length}</span>`;
+
+          // 题干（支持 Markdown）
+          const qHTML = marked.parse(`${item.question}`);
+          block.innerHTML += `<div class="markdown">${qHTML}</div><br />`;
+
+          // 选项（A-F）
+          if (item.selections) {
+            let optionsHTML = "";
+            for (const [key, val] of Object.entries(item.selections)) {
+              optionsHTML += `
+                <label class="selection-label grid-layout">
+                  <input type="checkbox" disabled />
+                  <strong class="selection-key">${key}: </strong>
+                  <div class="selection-body">${marked.parse(val)}</div>
+                </label>
+              `;
+            }
+            block.innerHTML += `<div class="options">${optionsHTML}</div>`;
+          }
+
+          // 正确答案
+          const answers = Array.isArray(item.answers) ? item.answers.join(', ') : item.answers;
+          block.innerHTML += `<hr /><h3 class="answers">✅ 正确答案: ${answers}</h3>`;
+
+          // 解析与建议（Markdown）
+          if (item.summary) {
+            block.innerHTML += `<div class="markdown"><strong>解析：</strong>${marked.parse(item.summary)}</div>`;
+          }
+          if (item.suggestion) {
+            block.innerHTML += `<div class="markdown"><strong>建议：</strong>${marked.parse(item.suggestion)}</div>`;
+          }
+
+          container.appendChild(block);
+        });
+      })
+      .catch(err => {
+        document.getElementById("questions").innerText = "❌ 加载失败：" + err.message;
+      });
+  </script>
+</body>
+</html>
